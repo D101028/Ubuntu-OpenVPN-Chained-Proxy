@@ -48,12 +48,12 @@ class SafeCounter:
             self.value += 1
             return self.value
 
-def keep_alive(target_ip: str = "8.8.8.8", interval: int = 60, max_retry: int = 3):
+def keep_alive(target_ip: str = "8.8.8.8", interval: int = 20, max_retry: int = 3):
     """建立一個背景執行緒，週期性對指定 IP 發送 Ping 請求以保持 OpenVPN 連線。
 
     Args:
         target_ip (str): 要 Ping 的目標 IP 位址。預設為 '8.8.8.8'。
-        interval (int): 每次 Ping 的間隔時間（秒）。預設為 60 秒。
+        interval (int): 每次 Ping 的間隔時間（秒）。預設為 20 秒。
         max_retry (int): 容忍連續 Ping 失敗的最高次數
 
     Returns:
