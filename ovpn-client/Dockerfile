@@ -15,6 +15,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY vpn_manager.py uma_filter.py entrypoint.sh .
 RUN chmod +x entrypoint.sh
 
-COPY test-client.ovpn test-client.ovpn
-
 ENTRYPOINT ["/app/entrypoint.sh"]
