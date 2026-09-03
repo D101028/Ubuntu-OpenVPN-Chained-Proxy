@@ -79,9 +79,9 @@ def keep_alive(target_ip: str = "8.8.8.8", interval: int = 20, timeout: int = 20
                     check=True,
                     timeout=timeout,
                 )
-                print(
-                    f"[Keep-Alive] 已發送保持連線訊號至 {target_ip} ({time.strftime('%X')})"
-                )
+                # print(
+                #     f"[Keep-Alive] 已發送保持連線訊號至 {target_ip} ({time.strftime('%X')})"
+                # )
             except Exception as e:
                 print(f"[Keep-Alive] 發送失敗: {e}")
                 if retry_counter.value >= max_retry:
