@@ -48,12 +48,13 @@ class SafeCounter:
             self.value += 1
             return self.value
 
-def keep_alive(target_ip: str = "8.8.8.8", interval: int = 20, max_retry: int = 3):
+def keep_alive(target_ip: str = "8.8.8.8", interval: int = 20, timeout: int = 20, max_retry: int = 3):
     """建立一個背景執行緒，週期性對指定 IP 發送 Ping 請求以保持 OpenVPN 連線。
 
     Args:
         target_ip (str): 要 Ping 的目標 IP 位址。預設為 '8.8.8.8'。
         interval (int): 每次 Ping 的間隔時間（秒）。預設為 20 秒。
+        timeout (int): 等待 Ping 的時間（秒）上限。預設為 20 秒。
         max_retry (int): 容忍連續 Ping 失敗的最高次數
 
     Returns:
@@ -70,14 +71,16 @@ def keep_alive(target_ip: str = "8.8.8.8", interval: int = 20, max_retry: int = 
         # 當 stop_event 沒有被設定時，持續循環
         while not stop_event.is_set():
             try:
-                # 執行 Ping 指令（只發送 1 個封包，並將輸出隱藏以免打擾主畫面）
-                # stdout 和 stderr 導向 DEVNULL 可以讓終端機保持乾淨
-                subprocess.run(
+                # 執行 Ping 指令
+                result = subprocess.run(
                     ["ping", "-c", "1", target_ip],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     check=False,
+                    timeout=timeout,
                 )
+                if result.returncode:
+                    raise Exception(f"None-zero returncode '{result.returncode}' when ping")
                 print(
                     f"[Keep-Alive] 已發送保持連線訊號至 {target_ip} ({time.strftime('%X')})"
                 )
