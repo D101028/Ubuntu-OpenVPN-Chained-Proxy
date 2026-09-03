@@ -5,6 +5,7 @@ CONFIG_DIR="/etc/openvpn"
 CLIENTS_OUT="/etc/openvpn/clients"
 CCD_DIR="$CONFIG_DIR/ccd"
 SERVER_HOST="${SERVER_HOST:-127.0.0.1}"
+SERVER_PORT="${SERVER_PORT:-46159}"
 
 mkdir -p "$CONFIG_DIR" "$CLIENTS_OUT" "$CCD_DIR"
 
@@ -45,7 +46,7 @@ if [ ! -f "$CONFIG_DIR/server.key" ]; then
 client
 dev tun
 proto udp
-remote $SERVER_HOST 46159
+remote $SERVER_HOST $SERVER_PORT
 resolv-retry infinite
 nobind
 persist-key
@@ -73,7 +74,7 @@ fi
 
 # 2. 建立 OpenVPN 伺服端設定
 cat <<EOF > "$CONFIG_DIR/server.conf"
-port 46159
+port $SERVER_PORT
 proto udp
 dev tun
 ca $CONFIG_DIR/ca.crt
