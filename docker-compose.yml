@@ -1,0 +1,99 @@
+services:
+  # --- 1. Cloudflare WARP (TUN 模式) ---
+  warp:
+    build:
+      context: ./warp
+    container_name: warp-tun
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    sysctls:
+      - net.ipv4.ip_forward=1
+      - net.ipv4.conf.all.rp_filter=2
+      - net.ipv4.conf.default.rp_filter=2
+    ports:
+      - "127.0.0.1:10801:10801" # WARP SOCKS5 代理
+      - "127.0.0.1:10802:10802" # WARP HTTP 代理
+    networks:
+      vpn_bridge:
+        ipv4_address: 172.20.0.10
+    volumes:
+      - warp-data:/var/lib/cloudflare-warp
+
+  warp-gost:
+    image: gogost/gost:latest
+    container_name: warp-gost
+    restart: unless-stopped
+    network_mode: "service:warp"
+    depends_on:
+      - warp
+    command: -L=socks5://:10801 -L=http://:10802
+
+  # --- 2. OpenVPN 客戶端 (自動爬取管理) ---
+  ovpn-client:
+    build:
+      context: ./ovpn-client
+    container_name: ovpn-client
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    sysctls:
+      - net.ipv4.ip_forward=1
+      - net.ipv4.conf.all.rp_filter=2
+      - net.ipv4.conf.default.rp_filter=2
+    ports:
+      - "127.0.0.1:10803:10803" # OpenVPN SOCKS5 代理
+      - "127.0.0.1:10804:10804" # OpenVPN HTTP 代理
+    networks:
+      vpn_bridge:
+        ipv4_address: 172.20.0.20
+
+  ovpn-gost:
+    image: gogost/gost:latest
+    container_name: ovpn-gost
+    restart: unless-stopped
+    network_mode: "service:ovpn-client"
+    depends_on:
+      - ovpn-client
+    command: -L=socks5://:10803 -L=http://:10804
+
+  # --- 3. OpenVPN 伺服端 (對外入口 + 策略分流) ---
+  ovpn-server:
+    build:
+      context: ./ovpn-server
+    container_name: ovpn-server
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    sysctls:
+      - net.ipv4.ip_forward=1
+    ports:
+      - "0.0.0.0:46159:46159/udp" # 外部連線入口
+    environment:
+      - SERVER_HOST=${SERVER_HOST:-127.0.0.1}
+    networks:
+      vpn_bridge:
+        ipv4_address: 172.20.0.30
+    volumes:
+      - ./ovpn-server/clients:/etc/openvpn/clients
+      - server-data:/etc/openvpn
+    depends_on:
+      - warp
+      - ovpn-client
+
+networks:
+  vpn_bridge:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
+
+volumes:
+  warp-data:
+  server-data:
