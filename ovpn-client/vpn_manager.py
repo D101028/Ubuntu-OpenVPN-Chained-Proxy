@@ -72,15 +72,13 @@ def keep_alive(target_ip: str = "8.8.8.8", interval: int = 20, timeout: int = 20
         while not stop_event.is_set():
             try:
                 # 執行 Ping 指令
-                result = subprocess.run(
+                subprocess.run(
                     ["ping", "-c", "1", target_ip],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
-                    check=False,
+                    check=True,
                     timeout=timeout,
                 )
-                if result.returncode:
-                    raise Exception(f"None-zero returncode '{result.returncode}' when ping")
                 print(
                     f"[Keep-Alive] 已發送保持連線訊號至 {target_ip} ({time.strftime('%X')})"
                 )
