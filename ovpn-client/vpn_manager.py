@@ -73,7 +73,7 @@ def keep_alive(target_ip: str = "8.8.8.8", interval: int = 60, max_retry: int = 
                 # 執行 Ping 指令（只發送 1 個封包，並將輸出隱藏以免打擾主畫面）
                 # stdout 和 stderr 導向 DEVNULL 可以讓終端機保持乾淨
                 subprocess.run(
-                    ["ping", "-n", "1", target_ip],
+                    ["ping", "-c", "1", target_ip],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     check=False,
