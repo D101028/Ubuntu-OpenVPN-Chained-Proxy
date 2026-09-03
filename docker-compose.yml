@@ -74,9 +74,10 @@ services:
     sysctls:
       - net.ipv4.ip_forward=1
     ports:
-      - "0.0.0.0:46159:46159/udp" # 外部連線入口
+      - "0.0.0.0:${SERVER_PORT:46159}:${SERVER_PORT:46159}/udp" # 外部連線入口
     environment:
       - SERVER_HOST=${SERVER_HOST:-127.0.0.1}
+      - SERVER_PORT=${SERVER_PORT:46159}
     networks:
       vpn_bridge:
         ipv4_address: 172.20.0.30
