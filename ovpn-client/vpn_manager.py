@@ -1,7 +1,9 @@
 import sys
-import time
 import signal
 import subprocess
+import threading
+import time
+from collections import Counter
 
 import requests
 
@@ -36,6 +38,69 @@ def vpn_is_ok() -> bool:
     except requests.RequestException:
         return False
 
+class SafeCounter:
+    def __init__(self):
+        self.value = 0
+        self.lock = threading.Lock()
+
+    def increment(self):
+        with self.lock:
+            self.value += 1
+            return self.value
+
+def keep_alive(target_ip: str = "8.8.8.8", interval: int = 60, max_retry: int = 3):
+    """建立一個背景執行緒，週期性對指定 IP 發送 Ping 請求以保持 OpenVPN 連線。
+
+    Args:
+        target_ip (str): 要 Ping 的目標 IP 位址。預設為 '8.8.8.8'。
+        interval (int): 每次 Ping 的間隔時間（秒）。預設為 60 秒。
+        max_retry (int): 容忍連續 Ping 失敗的最高次數
+
+    Returns:
+        tuple: (threading.Thread, threading.Event)
+               - thread: 執行的執行緒物件。
+               - stop_event: 用於通知執行緒停止的 Event 物件。
+    """
+    stop_event = threading.Event()
+    retry_counter = SafeCounter()
+
+    def ping_worker():
+        print(f"[Keep-Alive] 背景保持連線程式已啟動，目標：{target_ip}")
+
+        # 當 stop_event 沒有被設定時，持續循環
+        while not stop_event.is_set():
+            try:
+                # 執行 Ping 指令（只發送 1 個封包，並將輸出隱藏以免打擾主畫面）
+                # stdout 和 stderr 導向 DEVNULL 可以讓終端機保持乾淨
+                subprocess.run(
+                    ["ping", "-n", "1", target_ip],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+                print(
+                    f"[Keep-Alive] 已發送保持連線訊號至 {target_ip} ({time.strftime('%X')})"
+                )
+            except Exception as e:
+                print(f"[Keep-Alive] 發送失敗: {e}")
+                if retry_counter.value >= max_retry:
+                    stop_event.set()
+                    return 
+                retry_counter.increment()
+
+            # 使用 stop_event.wait(interval) 代替 time.sleep(interval)
+            # 這樣當主程式要求停止時，執行緒可以「立刻」反應，不用白白等待 interval 秒
+            if stop_event.wait(interval):
+                break
+
+        print("[Keep-Alive] 背景保持連線程式已安全停止。")
+
+    # 建立執行緒，並將 daemon 設為 True（確保主程式異常結束時，此執行緒也會跟著結束）
+    alive_thread = threading.Thread(target=ping_worker, daemon=True)
+    alive_thread.start()
+
+    return alive_thread, stop_event
+
 def main():
     global VPN_PROCESS
     print("[*] OpenVPN 客戶端管理器啟動...")
@@ -59,20 +124,26 @@ def main():
     ]
     VPN_PROCESS = subprocess.Popen(cmd)
     next_monitor = time.monotonic() + MONITOR_INTERVAL * 60
+    _, stop_event = keep_alive()
 
     while True:
         ret = VPN_PROCESS.poll()
         if ret is not None:
             print(f"[!] OpenVPN 異常終止 (代碼: {ret})，5 秒後嘗試重連...")
+            stop_event.set()
             time.sleep(5)
             break
-        if time.monotonic() >= next_monitor:
+        if time.monotonic() >= next_monitor or stop_event.is_set():
             print("[*] VPN 健康檢查中...")
             next_monitor = time.monotonic() + MONITOR_INTERVAL * 60
-            if not vpn_is_ok():
+            if not vpn_is_ok(): # 大檢查
                 print("[!] VPN 健康檢查失敗，正在終止連線以重新連線...")
                 VPN_PROCESS.terminate()
+                stop_event.set()
             else:
+                if stop_event.is_set():
+                    # Restart the alive thread
+                    _, stop_event = keep_alive()
                 print("[*] VPN 健康檢查成功")
         time.sleep(5)
 
