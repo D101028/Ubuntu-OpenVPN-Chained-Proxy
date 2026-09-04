@@ -48,6 +48,15 @@ services:
     ports:
       - "127.0.0.1:10803:10803" # OpenVPN SOCKS5 代理
       - "127.0.0.1:10804:10804" # OpenVPN HTTP 代理
+    environment:
+      - FIRST_CHECK_URL=${FIRST_CHECK_URL:-https://api.games.umamusume.jp}
+      - FIRST_CHECK_AVAILABLE_STATUS=${FIRST_CHECK_AVAILABLE_STATUS:-default}
+      - CHECK_URL=${CHECK_URL:-https://www.google.com/generate_204}
+      - CHECK_INTERVAL=${CHECK_INTERVAL:-30}
+      - CHECK_AVAILABLE_STATUS=${CHECK_AVAILABLE_STATUS:-204}
+      - PING_HOST=${PING_HOST:-8.8.8.8}
+      - PING_INTERVAL=${PING_INTERVAL:-20}
+      - AUTO_REFRESH_INTERVAL=${AUTO_REFRESH_INTERVAL:-disabled}
     networks:
       vpn_bridge:
         ipv4_address: 172.20.0.20

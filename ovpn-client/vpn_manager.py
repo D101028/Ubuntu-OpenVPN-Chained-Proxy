@@ -3,38 +3,67 @@ import signal
 import subprocess
 import threading
 import time
-from collections import Counter
 
 import requests
 
+from config import Config
 from uma_filter import vpn_selector
 
 VPN_PROCESS = None
 CONFIG_PATH = "/tmp/client.ovpn"
-
-MONITOR_INTERVAL = 30  # in minutes
+RECONNECT_DELAY_SECONDS = 5
+FETCH_RETRY_DELAY_SECONDS = 10
+PROCESS_STOP_TIMEOUT_SECONDS = 5
+LOOP_INTERVAL_SECONDS = 1
 
 def handle_exit(signum, frame):
     print("[*] 正在終止 OpenVPN 行程...")
-    if VPN_PROCESS and VPN_PROCESS.poll() is None:
-        VPN_PROCESS.terminate()
-        VPN_PROCESS.wait(timeout=5)
+    stop_vpn_process()
     sys.exit(0)
 
 signal.signal(signal.SIGTERM, handle_exit)
 signal.signal(signal.SIGINT, handle_exit)
 
+
+def stop_vpn_process() -> None:
+    """停止目前的 OpenVPN 子行程；必要時強制結束。"""
+    global VPN_PROCESS
+
+    if VPN_PROCESS is None or VPN_PROCESS.poll() is not None:
+        return
+
+    VPN_PROCESS.terminate()
+    try:
+        VPN_PROCESS.wait(timeout=PROCESS_STOP_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        print("[!] OpenVPN 未能及時停止，強制結束行程。")
+        VPN_PROCESS.kill()
+        VPN_PROCESS.wait()
+
 def fetch_and_select_ovpn() -> str:
     url = "https://www.vpngate.net/api/iphone/"
-    response = requests.get(url)
+    response = requests.get(url, timeout=30)
+    response.raise_for_status()
     raw = response.text.strip()
-    raw = raw[raw.index("#")+1:-1]
+    header_end = raw.find("#")
+    if header_end == -1:
+        raise ValueError("VPNGate 回應格式不正確：找不到 CSV 標頭")
+    raw = raw[header_end + 1:].strip().rstrip("*")
 
-    return vpn_selector(raw)[0]
+    selected = vpn_selector(raw)
+    return selected[0] if selected else ""
 
 def vpn_is_ok() -> bool:
     try:
-        return requests.get("https://www.google.com/generate_204", timeout=10).status_code == 204
+        response = requests.get(Config.CHECK_URL, timeout=10)
+        if Config.CHECK_AVAILABLE_STATUS != "default":
+            return str(response.status_code) == str(Config.CHECK_AVAILABLE_STATUS)
+        else:
+            try:
+                response.raise_for_status()
+                return True
+            except requests.HTTPError:
+                return False
     except requests.RequestException:
         return False
 
@@ -48,12 +77,15 @@ class SafeCounter:
             self.value += 1
             return self.value
 
-def keep_alive(target_ip: str = "8.8.8.8", interval: int = 20, timeout: int = 20, max_retry: int = 3):
+def keep_alive(
+    target_ip: str | None = None,
+    interval: int | None = None,
+    timeout: int = 20, max_retry: int = 3):
     """建立一個背景執行緒，週期性對指定 IP 發送 Ping 請求以保持 OpenVPN 連線。
 
     Args:
-        target_ip (str): 要 Ping 的目標 IP 位址。預設為 '8.8.8.8'。
-        interval (int): 每次 Ping 的間隔時間（秒）。預設為 20 秒。
+        target_ip (str | None): 要 Ping 的目標 IP 位址；未指定時使用 Config.PING_HOST。
+        interval (int | None): 每次 Ping 的間隔時間（秒）；未指定時使用 Config.PING_INTERVAL。
         timeout (int): 等待 Ping 的時間（秒）上限。預設為 20 秒。
         max_retry (int): 容忍連續 Ping 失敗的最高次數
 
@@ -62,6 +94,10 @@ def keep_alive(target_ip: str = "8.8.8.8", interval: int = 20, timeout: int = 20
                - thread: 執行的執行緒物件。
                - stop_event: 用於通知執行緒停止的 Event 物件。
     """
+    target_ip = target_ip or Config.PING_HOST or "8.8.8.8"
+    interval = interval if interval is not None else _positive_int(
+        Config.PING_INTERVAL, "PING_INTERVAL", 20
+    )
     stop_event = threading.Event()
     retry_counter = SafeCounter()
 
@@ -102,51 +138,90 @@ def keep_alive(target_ip: str = "8.8.8.8", interval: int = 20, timeout: int = 20
 
     return alive_thread, stop_event
 
+def _positive_int(value: str, name: str, default: int) -> int:
+    """讀取正整數設定；格式錯誤時使用預設值並留下明確訊息。"""
+    try:
+        parsed = int(value)
+        if parsed <= 0:
+            raise ValueError
+        return parsed
+    except (TypeError, ValueError):
+        print(f"[!] {name} 必須是正整數，將使用預設值 {default}。")
+        return default
+
+
+def _auto_refresh_interval() -> int | None:
+    value = Config.AUTO_REFRESH_INTERVAL
+    if value is None or value.lower() == "disabled":
+        return None
+    return _positive_int(value, "AUTO_REFRESH_INTERVAL", 0) or None
+
+
 def main():
     global VPN_PROCESS
     print("[*] OpenVPN 客戶端管理器啟動...")
-    ovpn_data = fetch_and_select_ovpn()
-
-    if not ovpn_data:
-        print("[!] 尚未提供真實 .ovpn 內容，進入 Dummy 待機以維持容器運行...")
-        while True:
-            time.sleep(10)
-
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        f.write(ovpn_data)
-
-    print("[*] 正在啟動 OpenVPN 連線...")
-    cmd = [
-        "openvpn",
-        "--config", CONFIG_PATH,
-        "--dev", "tun0",
-        "--script-security", "2",
-        "--redirect-gateway", "def1"
-    ]
-    VPN_PROCESS = subprocess.Popen(cmd)
-    next_monitor = time.monotonic() + MONITOR_INTERVAL * 60
-    _, stop_event = keep_alive()
+    check_interval = _positive_int(Config.CHECK_INTERVAL, "CHECK_INTERVAL", 30)
+    refresh_interval = _auto_refresh_interval()
 
     while True:
-        ret = VPN_PROCESS.poll()
-        if ret is not None:
-            print(f"[!] OpenVPN 異常終止 (代碼: {ret})，5 秒後嘗試重連...")
-            stop_event.set()
-            time.sleep(5)
-            break
-        if time.monotonic() >= next_monitor or stop_event.is_set():
-            print("[*] VPN 健康檢查中...")
-            next_monitor = time.monotonic() + MONITOR_INTERVAL * 60
-            if not vpn_is_ok(): # 大檢查
-                print("[!] VPN 健康檢查失敗，正在終止連線以重新連線...")
-                VPN_PROCESS.terminate()
-                stop_event.set()
+        try:
+            ovpn_data = fetch_and_select_ovpn()
+        except Exception as exc:
+            print(f"[!] 無法取得或驗證 VPN 設定：{exc}，{FETCH_RETRY_DELAY_SECONDS} 秒後重試。")
+            time.sleep(FETCH_RETRY_DELAY_SECONDS)
+            continue
+
+        if not ovpn_data:
+            print(f"[!] 找不到可用的 VPN 設定，{FETCH_RETRY_DELAY_SECONDS} 秒後重試。")
+            time.sleep(FETCH_RETRY_DELAY_SECONDS)
+            continue
+
+        try:
+            with open(CONFIG_PATH, "w", encoding="utf-8") as config_file:
+                config_file.write(ovpn_data)
+
+            print("[*] 正在啟動 OpenVPN 連線...")
+            VPN_PROCESS = subprocess.Popen([
+                "openvpn", "--config", CONFIG_PATH, "--dev", "tun0",
+                "--script-security", "2", "--redirect-gateway", "def1",
+            ])
+        except (OSError, subprocess.SubprocessError) as exc:
+            print(f"[!] 無法啟動 OpenVPN：{exc}，{RECONNECT_DELAY_SECONDS} 秒後重試。")
+            time.sleep(RECONNECT_DELAY_SECONDS)
+            continue
+
+        _, stop_event = keep_alive()
+        now = time.monotonic()
+        next_monitor = now + check_interval * 60
+        next_refresh = now + refresh_interval * 60 if refresh_interval else None
+
+        try:
+            while VPN_PROCESS.poll() is None:
+                now = time.monotonic()
+                if next_refresh is not None and now >= next_refresh:
+                    print("[*] 已到達定期重連時間，正在重新連線...")
+                    break
+
+                if stop_event.is_set() or now >= next_monitor:
+                    print("[*] VPN 健康檢查中...")
+                    next_monitor = now + check_interval * 60
+                    if not vpn_is_ok():
+                        print("[!] VPN 健康檢查失敗，正在重新連線...")
+                        break
+
+                    if stop_event.is_set():
+                        _, stop_event = keep_alive()
+                    print("[*] VPN 健康檢查成功")
+
+                time.sleep(LOOP_INTERVAL_SECONDS)
             else:
-                if stop_event.is_set():
-                    # Restart the alive thread
-                    _, stop_event = keep_alive()
-                print("[*] VPN 健康檢查成功")
-        time.sleep(5)
+                print(f"[!] OpenVPN 異常終止 (代碼: {VPN_PROCESS.returncode})。")
+        finally:
+            stop_event.set()
+            stop_vpn_process()
+
+        print(f"[*] {RECONNECT_DELAY_SECONDS} 秒後嘗試重新連線...")
+        time.sleep(RECONNECT_DELAY_SECONDS)
 
 if __name__ == "__main__":
     main()

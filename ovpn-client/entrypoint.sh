@@ -11,4 +11,13 @@ iptables -t nat -A POSTROUTING ! -o eth0 -j MASQUERADE
 iptables -A FORWARD -i eth0 -j ACCEPT
 iptables -A FORWARD -o eth0 -j ACCEPT
 
-exec python vpn_manager.py
+exec python vpn_manager.py \
+    --first-check-url $FIRST_CHECK_URL \
+    --first-check-available-status $FIRST_CHECK_AVAILABLE_STATUS \
+    --check-url $CHECK_URL \
+    --check-available-status $CHECK_AVAILABLE_STATUS \
+    --check-interval $CHECK_INTERVAL \
+    --ping-host $PING_HOST \
+    --ping-interval $PING_INTERVAL \
+    --auto-refresh-interval $AUTO_REFRESH_INTERVAL
+    

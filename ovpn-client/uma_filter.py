@@ -12,6 +12,8 @@ from urllib.parse import urlparse
 from curl_cffi import requests
 from curl_cffi.requests.errors import RequestsError
 
+from config import Config
+
 COUNTRY_CODES = ["JP"]
 IP_FILTERED = [
     r"^219\.100\.37\.*"
@@ -148,7 +150,7 @@ class OvpnTester:
 
         return False
 
-    def check(self, api: str = "https://api.games.umamusume.jp") -> bool:
+    def check(self, api: str = Config.FIRST_CHECK_URL) -> bool:
         """融入檢測邏輯：
 
         1. 解析目標 URL 所有可能的 IPv4
@@ -188,6 +190,10 @@ class OvpnTester:
             response = requests.get(
                 api, timeout=10, impersonate="chrome124", verify=True
             )
+
+            if Config.FIRST_CHECK_AVAILABLE_STATUS != "default" \
+                and str(response.status_code) != str(Config.FIRST_CHECK_AVAILABLE_STATUS):
+                print(f"[狀態: 錯誤回應] HTTP {response.status_code} not {Config.FIRST_CHECK_AVAILABLE_STATUS}")
 
             # 情況一：成功拿到回應（伺服器正常運作時該路徑預設回傳 HTTP 404）
             print(f"[狀態: 正常回應] HTTP {response.status_code}")
